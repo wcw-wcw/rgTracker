@@ -77,7 +77,7 @@ function navigateToProfile(game, riotId) {
     location.href = buildTrackerValorantUrl(riotId);
     return;
   }
-  const safeGame = "league";
+  const safeGame = game === "tft" ? "tft" : "league";
   history.pushState({}, "", `/${safeGame}?riotId=${encodeURIComponent(riotId)}`);
   loadProfile(safeGame, riotId, false);
 }
@@ -121,7 +121,7 @@ function showProfileShell(game, riotId) {
   profileInput.value = riotId;
   landingInput.value = riotId;
   setProfileGameButtons(game);
-  gameLabel.textContent = game === "league" ? "League of Legends" : "Valorant";
+  gameLabel.textContent = gameLabelFor(game);
   profileTitle.textContent = riotId;
   profileSubtitle.textContent = "Loading account, rank, recent match, and performance data.";
   updatedAt.textContent = "";
@@ -133,7 +133,9 @@ function renderProfile(data) {
   profileTitle.textContent = `${data.account.gameName}#${data.account.tagLine}`;
   profileSubtitle.textContent = data.game === "league"
     ? `${data.region} · Level ${data.summoner?.level ?? "-"}`
-    : `${data.region} · ${data.overview.rank}`;
+    : data.game === "tft"
+      ? `${data.region}${data.summoner?.level ? ` · Level ${data.summoner.level}` : ""}`
+      : `${data.region} · ${data.overview.rank}`;
   updatedAt.textContent = `Updated ${new Date(data.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 
   if (data.apiLimited) {
@@ -150,23 +152,7 @@ function renderProfile(data) {
 }
 
 function renderSummary(data) {
-  const stats = data.game === "league"
-    ? [
-        ["Matches", data.overview.matches],
-        ["Win Rate", `${data.overview.winRate}%`],
-        ["Record", `${data.overview.wins}W ${data.overview.losses}L`],
-        ["Avg KDA", data.overview.avgKda],
-        ["CS / Min", data.overview.avgCsMin],
-        ["Avg Damage", formatNumber(data.overview.avgDamage)]
-      ]
-    : [
-        ["Matches", data.overview.matches],
-        ["Win Rate", `${data.overview.winRate}%`],
-        ["Record", `${data.overview.wins}W ${data.overview.losses}L`],
-        ["K/D", data.overview.kd],
-        ["ACS", data.overview.acs],
-        ["HS%", `${data.overview.headshotRate}%`]
-      ];
+  const stats = summaryStatsFor(data);
 
   summaryBand.innerHTML = stats.map(([label, value]) => `
     <div class="stat">
@@ -177,7 +163,7 @@ function renderSummary(data) {
 }
 
 function renderRanks(data) {
-  if (data.game === "league") {
+  if (data.game === "league" || data.game === "tft") {
     if (!data.ranked.length) {
       rankPanel.innerHTML = `<div class="empty">No ranked entries found.</div>`;
       return;
@@ -185,7 +171,7 @@ function renderRanks(data) {
     rankPanel.innerHTML = data.ranked.map((entry) => `
       <div class="rank-card">
         <div>
-          <strong>${escapeHtml(rankQueue(entry.queueType))}</strong>
+          <strong>${escapeHtml(data.game === "tft" ? tftRankQueue(entry.queueType) : rankQueue(entry.queueType))}</strong>
           <span class="pool-meta">${escapeHtml(entry.tier)} ${escapeHtml(entry.rank)} · ${entry.leaguePoints} LP</span>
         </div>
         <div class="pool-meta">${entry.wins}W ${entry.losses}L · ${entry.winRate}%</div>
@@ -213,8 +199,12 @@ function renderRanks(data) {
 }
 
 function renderPool(data) {
-  const items = data.game === "league" ? data.championPool : data.agentPool;
-  poolTitle.textContent = data.game === "league" ? "Champion Pool" : "Agent Pool";
+  if (data.game === "tft") {
+    renderTftPools(data);
+    return;
+  }
+  const items = data.game === "league" ? data.championPool : data.game === "tft" ? data.traitPool : data.agentPool;
+  poolTitle.textContent = data.game === "league" ? "Champion Pool" : data.game === "tft" ? "Trait Pool" : "Agent Pool";
   poolCaption.textContent = items.length ? `${items.length} picks` : "";
   if (!items.length) {
     poolList.innerHTML = `<div class="empty">No pick data available yet.</div>`;
@@ -224,12 +214,43 @@ function renderPool(data) {
     <div class="pool-row">
       <div>
         <strong>${escapeHtml(item.name)}</strong>
-        <span class="pool-meta">${item.games} games · ${item.winRate}% win</span>
+        <span class="pool-meta">${item.games} games · ${data.game === "tft" ? `${item.top4Rate}% top 4` : `${item.winRate}% win`}</span>
       </div>
-      <span>${data.game === "league" ? item.kda : item.kd} ${data.game === "league" ? "KDA" : "K/D"}</span>
-      <span>${data.game === "league" ? formatNumber(item.avgDamage) + " dmg" : item.acs + " ACS"}</span>
+      <span>${data.game === "league" ? item.kda + " KDA" : data.game === "tft" ? "#" + item.avgPlacement : item.kd + " K/D"}</span>
+      <span>${data.game === "league" ? formatNumber(item.avgDamage) + " dmg" : data.game === "tft" ? item.winRate + "% win" : item.acs + " ACS"}</span>
     </div>
   `).join("");
+}
+
+function renderTftPools(data) {
+  poolTitle.textContent = "TFT Pools";
+  poolCaption.textContent = `${data.traitPool.length} traits · ${data.unitPool.length} units`;
+  const traits = data.traitPool.map((item) => `
+    <div class="pool-row">
+      <div>
+        <strong>${escapeHtml(item.name)}</strong>
+        <span class="pool-meta">${item.games} games · ${item.top4Rate}% top 4 · tier ${item.avgTier}</span>
+      </div>
+      <span>#${item.avgPlacement}</span>
+      <span>${item.winRate}% win</span>
+    </div>
+  `).join("");
+  const units = data.unitPool.map((item) => `
+    <div class="pool-row">
+      <div>
+        <strong>${escapeHtml(item.name)}</strong>
+        <span class="pool-meta">${item.games} games · ${item.top4Rate}% top 4 · ${item.avgTier} star avg</span>
+      </div>
+      <span>#${item.avgPlacement}</span>
+      <span>${item.winRate}% win</span>
+    </div>
+  `).join("");
+  poolList.innerHTML = `
+    <div class="pool-subhead">Traits</div>
+    ${traits || `<div class="empty">No trait data available yet.</div>`}
+    <div class="pool-subhead">Units</div>
+    ${units || `<div class="empty">No unit data available yet.</div>`}
+  `;
 }
 
 function renderMatches(data) {
@@ -252,6 +273,19 @@ function renderMatches(data) {
           </div>
           <span>${match.kills}/${match.deaths}/${match.assists}</span>
           <span>${match.csPerMin} CS/min</span>
+        </div>
+      `;
+    }
+    if (data.game === "tft") {
+      return `
+        <div class="match-row match-row--tft">
+          <span class="result${match.top4 ? "" : " result--loss"}">${match.result}</span>
+          <div>
+            <strong>${escapeHtml(match.mode)}</strong>
+            <span class="match-meta">Set ${escapeHtml(match.set ?? "-")} · Level ${escapeHtml(match.level)} · Round ${escapeHtml(match.lastRound)}</span>
+          </div>
+          <span>${formatNumber(match.damageToPlayers)} dmg</span>
+          <span>${match.playersEliminated} elim</span>
         </div>
       `;
     }
@@ -290,7 +324,7 @@ function setProfileGameButtons(game) {
 
 function gameFromPath(pathname) {
   const path = pathname.replace(/^\/+|\/+$/g, "");
-  if (path === "league" || path === "valorant") return path;
+  if (path === "league" || path === "valorant" || path === "tft") return path;
   return "";
 }
 
@@ -308,8 +342,57 @@ function rankQueue(queueType) {
   return queueType === "RANKED_SOLO_5x5" ? "Ranked Solo/Duo" : queueType === "RANKED_FLEX_SR" ? "Ranked Flex" : queueType;
 }
 
+function tftRankQueue(queueType) {
+  return queueType === "RANKED_TFT" ? "Ranked TFT" : queueType === "RANKED_TFT_DOUBLE_UP" ? "Double Up" : queueType === "RANKED_TFT_TURBO" ? "Hyper Roll" : queueType;
+}
+
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function gameLabelFor(game) {
+  if (game === "league") return "League of Legends";
+  if (game === "tft") return "Teamfight Tactics";
+  return "Valorant";
+}
+
+function summaryStatsFor(data) {
+  if (data.game === "tft") {
+    return [
+      ["Matches", data.overview.matches],
+      ["Avg Place", data.overview.avgPlacement],
+      ["Top 4", `${data.overview.top4Rate}%`],
+      ["Wins", data.overview.firsts],
+      ["Best", data.overview.bestPlacement],
+      ["Avg Level", data.overview.avgLevel],
+      ["Avg Damage", formatNumber(data.overview.avgDamage)],
+      ["Avg Elims", data.overview.avgElims],
+      ["Avg Gold", data.overview.avgGold],
+      ["Bottom 4", data.overview.bottom4s]
+    ];
+  }
+  if (data.game === "league") {
+    return [
+      ["Matches", data.overview.matches],
+      ["Win Rate", `${data.overview.winRate}%`],
+      ["Record", `${data.overview.wins}W ${data.overview.losses}L`],
+      ["Avg KDA", data.overview.avgKda],
+      ["Avg K / D / A", `${data.overview.avgKills}/${data.overview.avgDeaths}/${data.overview.avgAssists}`],
+      ["CS / Min", data.overview.avgCsMin],
+      ["Avg Vision", data.overview.avgVision],
+      ["Kill Part.", `${data.overview.avgKillParticipation}%`],
+      ["Avg Gold", formatNumber(data.overview.avgGold)],
+      ["Avg Damage", formatNumber(data.overview.avgDamage)]
+    ];
+  }
+  return [
+    ["Matches", data.overview.matches],
+    ["Win Rate", `${data.overview.winRate}%`],
+    ["Record", `${data.overview.wins}W ${data.overview.losses}L`],
+    ["K/D", data.overview.kd],
+    ["ACS", data.overview.acs],
+    ["HS%", `${data.overview.headshotRate}%`]
+  ];
 }
 
 function buildTrackerValorantUrl(riotId) {

@@ -129,7 +129,7 @@ input {
 
 .button-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin-top: 14px;
 }
@@ -157,6 +157,11 @@ input {
 
 .game-button--league {
   background: var(--blue);
+}
+
+.game-button--tft {
+  background: var(--green);
+  color: #06120d;
 }
 
 .back-button {
@@ -208,7 +213,7 @@ input {
 
 .profile-search__form {
   display: grid;
-  grid-template-columns: minmax(260px, 420px) auto auto;
+  grid-template-columns: minmax(260px, 420px) auto auto auto;
   gap: 10px;
   align-items: center;
 }
@@ -234,6 +239,12 @@ input {
 .mini-game-button--league:hover {
   border-color: rgba(78, 165, 255, 0.72);
   background: rgba(78, 165, 255, 0.18);
+}
+
+.mini-game-button--tft.is-active,
+.mini-game-button--tft:hover {
+  border-color: rgba(63, 211, 136, 0.72);
+  background: rgba(63, 211, 136, 0.16);
 }
 
 .profile-header {
@@ -277,8 +288,9 @@ input {
 
 .profile-grid {
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
+  grid-template-columns: minmax(360px, 0.82fr) minmax(460px, 1.18fr);
   gap: 16px;
+  align-items: start;
 }
 
 .summary-band,
@@ -291,18 +303,20 @@ input {
 }
 
 .summary-band {
-  grid-column: 1 / -1;
+  grid-column: 1;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  background: var(--line);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  background: rgba(21, 25, 36, 0.9);
 }
 
 .stat {
-  min-height: 108px;
-  padding: 18px;
-  background: var(--panel);
+  min-height: 88px;
+  padding: 14px;
+  background: rgba(12, 15, 22, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 
 .stat span,
@@ -315,14 +329,24 @@ input {
 
 .stat strong {
   display: block;
-  margin-top: 8px;
-  font-size: 30px;
+  margin-top: 7px;
+  font-size: 25px;
 }
 
 .rank-panel,
 .table-panel,
 .matches-panel {
   padding: 18px;
+}
+
+.rank-panel,
+.table-panel {
+  grid-column: 1;
+}
+
+.matches-panel {
+  grid-column: 2;
+  grid-row: 1 / span 3;
 }
 
 .rank-card {
@@ -375,8 +399,21 @@ input {
   display: block;
 }
 
+.pool-subhead {
+  padding: 14px 0 4px;
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .match-row {
   grid-template-columns: 92px 1fr 120px 110px;
+}
+
+.match-row--tft {
+  grid-template-columns: 76px 1fr 110px 80px;
 }
 
 .result {
@@ -419,7 +456,7 @@ input {
   }
 
   .profile-search__form {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
     margin-top: 14px;
   }
 
@@ -438,12 +475,21 @@ input {
     grid-template-columns: 1fr;
   }
 
+  .summary-band,
+  .rank-panel,
+  .table-panel,
+  .matches-panel {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
   .match-row,
   .pool-row {
     grid-template-columns: 1fr;
   }
 
-  .button-row {
+  .button-row,
+  .profile-search__form {
     grid-template-columns: 1fr;
   }
 }

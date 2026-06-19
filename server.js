@@ -93,6 +93,15 @@ async function handleApi(url, res) {
     return;
   }
 
+  if (url.pathname === "/api/profile/tft") {
+    const riotId = parseRiotId(url.searchParams.get("riotId"));
+    const platform = (url.searchParams.get("platform") || DEFAULT_LOL_PLATFORM).toLowerCase();
+    const routing = ROUTING_BY_PLATFORM[platform] || DEFAULT_ROUTING;
+    const data = await buildTftProfile(riotId, platform, routing);
+    sendJson(res, 200, data);
+    return;
+  }
+
   if (url.pathname === "/api/profile/valorant") {
     const riotId = parseRiotId(url.searchParams.get("riotId"));
     const routing = url.searchParams.get("routing") || DEFAULT_ROUTING;
@@ -132,6 +141,38 @@ async function buildLeagueProfile(riotId, platform, routing) {
     ranked: rankedEntries.map(formatLeagueEntry).sort((a, b) => queuePriority(a.queueType) - queuePriority(b.queueType)),
     overview: summarizeLolOverview(analyzedMatches),
     championPool: summarizeChampionPool(analyzedMatches),
+    recentMatches: analyzedMatches
+  };
+}
+
+async function buildTftProfile(riotId, platform, routing) {
+  const account = await getAccountByRiotId(riotId, routing);
+  const [summoner, matchIds] = await Promise.all([
+    riotFetch(`https://${platform}.api.riotgames.com/tft/summoner/v1/summoners/by-puuid/${encodeURIComponent(account.puuid)}`).catch(() => null),
+    riotFetch(`https://${routing}.api.riotgames.com/tft/match/v1/matches/by-puuid/${encodeURIComponent(account.puuid)}/ids?start=0&count=20`)
+  ]);
+
+  const [rankedEntries, matches] = await Promise.all([
+    riotFetch(`https://${platform}.api.riotgames.com/tft/league/v1/entries/by-puuid/${encodeURIComponent(account.puuid)}`).catch(() => []),
+    Promise.all(matchIds.slice(0, 16).map((id) => riotFetch(`https://${routing}.api.riotgames.com/tft/match/v1/matches/${encodeURIComponent(id)}`).catch(() => null)))
+  ]);
+
+  const analyzedMatches = matches.filter(Boolean).map((match) => summarizeTftMatch(match, account.puuid)).filter(Boolean);
+
+  return {
+    game: "tft",
+    account,
+    region: platform.toUpperCase(),
+    updatedAt: new Date().toISOString(),
+    summoner: summoner ? {
+      name: summoner.name,
+      level: summoner.summonerLevel,
+      profileIconId: summoner.profileIconId
+    } : null,
+    ranked: rankedEntries.map(formatTftEntry).sort((a, b) => queuePriority(a.queueType) - queuePriority(b.queueType)),
+    overview: summarizeTftOverview(analyzedMatches),
+    traitPool: summarizeTftTraits(analyzedMatches),
+    unitPool: summarizeTftUnits(analyzedMatches),
     recentMatches: analyzedMatches
   };
 }
@@ -202,6 +243,7 @@ function summarizeLolMatch(match, puuid) {
     visionScore: participant.visionScore,
     damage: participant.totalDamageDealtToChampions,
     gold: participant.goldEarned,
+    killParticipation: percent(participant.kills + participant.assists, team?.objectives?.champion?.kills || 0),
     duration: match.info.gameDuration,
     createdAt: match.info.gameCreation,
     result: participant.win ? "Victory" : "Defeat",
@@ -219,7 +261,12 @@ function summarizeLolOverview(matches) {
       avgKda: 0,
       avgCsMin: 0,
       avgVision: 0,
-      avgDamage: 0
+      avgDamage: 0,
+      avgGold: 0,
+      avgKillParticipation: 0,
+      avgKills: 0,
+      avgDeaths: 0,
+      avgAssists: 0
     };
   }
 
@@ -231,8 +278,10 @@ function summarizeLolOverview(matches) {
     acc.csMin += match.csPerMin;
     acc.vision += match.visionScore;
     acc.damage += match.damage;
+    acc.gold += match.gold;
+    acc.killParticipation += match.killParticipation;
     return acc;
-  }, { wins: 0, kills: 0, deaths: 0, assists: 0, csMin: 0, vision: 0, damage: 0 });
+  }, { wins: 0, kills: 0, deaths: 0, assists: 0, csMin: 0, vision: 0, damage: 0, gold: 0, killParticipation: 0 });
 
   return {
     matches: matches.length,
@@ -242,7 +291,12 @@ function summarizeLolOverview(matches) {
     avgKda: ratio(totals.kills + totals.assists, totals.deaths),
     avgCsMin: average(totals.csMin, matches.length),
     avgVision: average(totals.vision, matches.length),
-    avgDamage: Math.round(average(totals.damage, matches.length))
+    avgDamage: Math.round(average(totals.damage, matches.length)),
+    avgGold: Math.round(average(totals.gold, matches.length)),
+    avgKillParticipation: average(totals.killParticipation, matches.length),
+    avgKills: average(totals.kills, matches.length),
+    avgDeaths: average(totals.deaths, matches.length),
+    avgAssists: average(totals.assists, matches.length)
   };
 }
 
@@ -368,6 +422,148 @@ function summarizeAgentPool(matches) {
   })).sort((a, b) => b.games - a.games || b.winRate - a.winRate).slice(0, 6);
 }
 
+function summarizeTftMatch(match, puuid) {
+  const participant = match.info?.participants?.find((player) => player.puuid === puuid);
+  if (!participant) return null;
+  const traits = (participant.traits || [])
+    .filter((trait) => trait.tier_current > 0)
+    .map((trait) => ({
+      name: cleanTftName(trait.name),
+      units: trait.num_units,
+      tier: trait.tier_current,
+      maxTier: trait.tier_total
+    }))
+    .sort((a, b) => b.tier - a.tier || b.units - a.units)
+    .slice(0, 6);
+  const units = (participant.units || [])
+    .map((unit) => ({
+      name: cleanTftName(unit.character_id),
+      tier: unit.tier || 1,
+      rarity: unit.rarity ?? 0,
+      items: unit.itemNames || []
+    }))
+    .sort((a, b) => b.tier - a.tier || b.rarity - a.rarity)
+    .slice(0, 8);
+
+  return {
+    id: match.metadata?.match_id,
+    queueId: match.info?.queue_id,
+    mode: tftQueueName(match.info?.queue_id),
+    placement: participant.placement,
+    result: placementLabel(participant.placement),
+    top4: participant.placement <= 4,
+    first: participant.placement === 1,
+    level: participant.level,
+    lastRound: participant.last_round,
+    goldLeft: participant.gold_left,
+    playersEliminated: participant.players_eliminated,
+    damageToPlayers: participant.total_damage_to_players,
+    timeEliminated: participant.time_eliminated,
+    companion: cleanTftName(participant.companion?.content_ID || ""),
+    set: match.info?.tft_set_number,
+    gameLength: match.info?.game_length,
+    createdAt: match.info?.game_datetime,
+    version: match.info?.game_version,
+    traits,
+    units
+  };
+}
+
+function summarizeTftOverview(matches) {
+  if (!matches.length) {
+    return {
+      matches: 0,
+      avgPlacement: 0,
+      top4Rate: 0,
+      winRate: 0,
+      firsts: 0,
+      top4s: 0,
+      bottom4s: 0,
+      avgLevel: 0,
+      avgDamage: 0,
+      avgElims: 0,
+      avgGold: 0,
+      bestPlacement: "-"
+    };
+  }
+  const totals = matches.reduce((acc, match) => {
+    acc.placement += match.placement;
+    acc.top4 += match.top4 ? 1 : 0;
+    acc.firsts += match.first ? 1 : 0;
+    acc.level += match.level;
+    acc.damage += match.damageToPlayers;
+    acc.elims += match.playersEliminated;
+    acc.gold += match.goldLeft;
+    acc.best = Math.min(acc.best, match.placement);
+    return acc;
+  }, { placement: 0, top4: 0, firsts: 0, level: 0, damage: 0, elims: 0, gold: 0, best: 8 });
+
+  return {
+    matches: matches.length,
+    avgPlacement: average(totals.placement, matches.length),
+    top4Rate: percent(totals.top4, matches.length),
+    winRate: percent(totals.firsts, matches.length),
+    firsts: totals.firsts,
+    top4s: totals.top4,
+    bottom4s: matches.length - totals.top4,
+    avgLevel: average(totals.level, matches.length),
+    avgDamage: Math.round(average(totals.damage, matches.length)),
+    avgElims: average(totals.elims, matches.length),
+    avgGold: average(totals.gold, matches.length),
+    bestPlacement: `#${totals.best}`
+  };
+}
+
+function summarizeTftTraits(matches) {
+  const byTrait = new Map();
+  for (const match of matches) {
+    for (const trait of match.traits) {
+      const entry = byTrait.get(trait.name) || { name: trait.name, games: 0, top4s: 0, firsts: 0, avgPlacement: 0, avgTier: 0 };
+      entry.games += 1;
+      entry.top4s += match.top4 ? 1 : 0;
+      entry.firsts += match.first ? 1 : 0;
+      entry.avgPlacement += match.placement;
+      entry.avgTier += trait.tier;
+      byTrait.set(trait.name, entry);
+    }
+  }
+  return Array.from(byTrait.values())
+    .map((entry) => ({
+      ...entry,
+      top4Rate: percent(entry.top4s, entry.games),
+      winRate: percent(entry.firsts, entry.games),
+      avgPlacement: average(entry.avgPlacement, entry.games),
+      avgTier: average(entry.avgTier, entry.games)
+    }))
+    .sort((a, b) => b.games - a.games || b.top4Rate - a.top4Rate)
+    .slice(0, 8);
+}
+
+function summarizeTftUnits(matches) {
+  const byUnit = new Map();
+  for (const match of matches) {
+    for (const unit of match.units) {
+      const entry = byUnit.get(unit.name) || { name: unit.name, games: 0, top4s: 0, firsts: 0, avgPlacement: 0, avgTier: 0 };
+      entry.games += 1;
+      entry.top4s += match.top4 ? 1 : 0;
+      entry.firsts += match.first ? 1 : 0;
+      entry.avgPlacement += match.placement;
+      entry.avgTier += unit.tier;
+      byUnit.set(unit.name, entry);
+    }
+  }
+  return Array.from(byUnit.values())
+    .map((entry) => ({
+      ...entry,
+      top4Rate: percent(entry.top4s, entry.games),
+      winRate: percent(entry.firsts, entry.games),
+      avgPlacement: average(entry.avgPlacement, entry.games),
+      avgTier: average(entry.avgTier, entry.games)
+    }))
+    .sort((a, b) => b.games - a.games || b.top4Rate - a.top4Rate)
+    .slice(0, 8);
+}
+
 function formatLeagueEntry(entry) {
   return {
     queueType: entry.queueType,
@@ -379,6 +575,20 @@ function formatLeagueEntry(entry) {
     winRate: percent(entry.wins, entry.wins + entry.losses),
     hotStreak: entry.hotStreak,
     veteran: entry.veteran
+  };
+}
+
+function formatTftEntry(entry) {
+  return {
+    queueType: entry.queueType,
+    tier: entry.tier,
+    rank: entry.rank,
+    leaguePoints: entry.leaguePoints,
+    wins: entry.wins,
+    losses: entry.losses,
+    winRate: percent(entry.wins, entry.wins + entry.losses),
+    ratedTier: entry.ratedTier,
+    ratedRating: entry.ratedRating
   };
 }
 
@@ -477,6 +687,33 @@ function queueName(queueId) {
     1700: "Arena"
   };
   return names[queueId] || `Queue ${queueId}`;
+}
+
+function tftQueueName(queueId) {
+  const names = {
+    1090: "Normal",
+    1100: "Ranked",
+    1110: "Tutorial",
+    1130: "Hyper Roll",
+    1150: "Double Up",
+    1160: "Double Up Workshop"
+  };
+  return names[queueId] || `Queue ${queueId}`;
+}
+
+function placementLabel(placement) {
+  if (!placement) return "-";
+  const suffix = placement === 1 ? "st" : placement === 2 ? "nd" : placement === 3 ? "rd" : "th";
+  return `${placement}${suffix}`;
+}
+
+function cleanTftName(value) {
+  return titleCase(String(value || "Unknown")
+    .replace(/^TFT\d+_/i, "")
+    .replace(/^Characters_?/i, "")
+    .replace(/^Items_?/i, "")
+    .replace(/^Augment_?/i, "")
+    .replace(/_/g, " "));
 }
 
 function titleCase(value) {
