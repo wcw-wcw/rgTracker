@@ -62,6 +62,10 @@ function routeFromLocation(push = false) {
   const game = gameFromPath(location.pathname);
   const riotId = new URLSearchParams(location.search).get("riotId");
   if (game && riotId) {
+    if (game === "valorant") {
+      location.replace(buildTrackerValorantUrl(riotId));
+      return;
+    }
     loadProfile(game, riotId, push);
     return;
   }
@@ -69,7 +73,11 @@ function routeFromLocation(push = false) {
 }
 
 function navigateToProfile(game, riotId) {
-  const safeGame = game === "league" ? "league" : "valorant";
+  if (game === "valorant") {
+    location.href = buildTrackerValorantUrl(riotId);
+    return;
+  }
+  const safeGame = "league";
   history.pushState({}, "", `/${safeGame}?riotId=${encodeURIComponent(riotId)}`);
   loadProfile(safeGame, riotId, false);
 }
@@ -302,4 +310,9 @@ function rankQueue(queueType) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function buildTrackerValorantUrl(riotId) {
+  const normalized = riotId.replace(/\s+/g, "");
+  return `https://tracker.gg/valorant/profile/riot/${encodeURIComponent(normalized)}/overview`;
 }
