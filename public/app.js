@@ -62,10 +62,6 @@ function routeFromLocation(push = false) {
   const game = gameFromPath(location.pathname);
   const riotId = new URLSearchParams(location.search).get("riotId");
   if (game && riotId) {
-    if (game === "valorant") {
-      location.replace(buildTrackerValorantUrl(riotId));
-      return;
-    }
     loadProfile(game, riotId, push);
     return;
   }
@@ -73,11 +69,7 @@ function routeFromLocation(push = false) {
 }
 
 function navigateToProfile(game, riotId) {
-  if (game === "valorant") {
-    location.href = buildTrackerValorantUrl(riotId);
-    return;
-  }
-  const safeGame = game === "tft" ? "tft" : "league";
+  const safeGame = game === "valorant" ? "valorant" : game === "tft" ? "tft" : "league";
   history.pushState({}, "", `/${safeGame}?riotId=${encodeURIComponent(riotId)}`);
   loadProfile(safeGame, riotId, false);
 }
@@ -91,6 +83,10 @@ async function loadProfile(game, riotId) {
   activeController = new AbortController();
 
   try {
+    if (game === "valorant") {
+      await loadValorantProfile(riotId);
+      return;
+    }
     const response = await fetch(`/api/profile/${game}?riotId=${encodeURIComponent(riotId)}`, {
       signal: activeController.signal
     });
@@ -101,6 +97,26 @@ async function loadProfile(game, riotId) {
     if (error.name === "AbortError") return;
     showProfileError(error.message);
   }
+}
+
+async function loadValorantProfile(riotId) {
+  const sessionResponse = await fetch("/api/auth/session", { signal: activeController.signal });
+  const session = await sessionResponse.json();
+  if (!session.authenticated) {
+    renderValorantGate(riotId, session);
+    return;
+  }
+  const linkedRiotId = `${session.account.gameName}#${session.account.tagLine}`;
+  if (normalizeRiotId(riotId) !== normalizeRiotId(linkedRiotId)) {
+    renderValorantMismatch(riotId, linkedRiotId);
+    return;
+  }
+  const response = await fetch(`/api/profile/valorant?riotId=${encodeURIComponent(linkedRiotId)}`, {
+    signal: activeController.signal
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Could not load Valorant profile.");
+  renderProfile(data);
 }
 
 function showLanding() {
@@ -316,6 +332,75 @@ function showProfileError(message) {
   errorBanner.textContent = message;
 }
 
+function renderValorantGate(riotId, session) {
+  const rsoIssue = new URLSearchParams(location.search).get("rso");
+  loading.hidden = true;
+  errorBanner.hidden = !rsoIssue;
+  errorBanner.textContent = rsoIssue ? rsoMessage(rsoIssue) : "";
+  profileContent.hidden = false;
+  profileTitle.textContent = riotId;
+  profileSubtitle.textContent = "Valorant stats require player opt-in before RGTracker can display them.";
+  updatedAt.textContent = session.rsoConfigured ? "RSO required" : "RSO setup needed";
+  summaryBand.innerHTML = `
+    <div class="stat">
+      <span>Status</span>
+      <strong>Private</strong>
+    </div>
+    <div class="stat">
+      <span>Requirement</span>
+      <strong>RSO Opt-in</strong>
+    </div>
+  `;
+  rankPanel.innerHTML = `
+    <div class="consent-panel">
+      <h3>Connect Riot Account</h3>
+      <p>RGTracker only displays VALORANT stats for players who sign in with Riot and opt in to sharing their data. Account linking may make your VALORANT stats visible on this site.</p>
+      ${session.rsoConfigured
+        ? `<a class="connect-button" href="/auth/riot/start?returnTo=${encodeURIComponent(`/valorant?riotId=${riotId}`)}">Connect with Riot</a>`
+        : `<p class="setup-warning">RSO client credentials are not configured yet. Add them in Vercel environment variables after Riot enables RSO for this app.</p>`}
+    </div>
+  `;
+  poolTitle.textContent = "Opt-in Policy";
+  poolCaption.textContent = "";
+  poolList.innerHTML = `
+    <div class="empty">Players who have not linked their Riot account will not have VALORANT stats shown here or exposed to other users.</div>
+  `;
+  matchCaption.textContent = "";
+  matchList.innerHTML = `<div class="empty">Match history appears after the player links this Riot account.</div>`;
+}
+
+function renderValorantMismatch(requestedRiotId, linkedRiotId) {
+  loading.hidden = true;
+  errorBanner.hidden = false;
+  errorBanner.textContent = "This VALORANT profile has not opted in through RGTracker.";
+  profileContent.hidden = false;
+  profileTitle.textContent = requestedRiotId;
+  profileSubtitle.textContent = `Signed in as ${linkedRiotId}. VALORANT stats can only be displayed for the linked account.`;
+  updatedAt.textContent = "Opt-in required";
+  summaryBand.innerHTML = `
+    <div class="stat">
+      <span>Requested</span>
+      <strong>${escapeHtml(requestedRiotId)}</strong>
+    </div>
+    <div class="stat">
+      <span>Linked</span>
+      <strong>${escapeHtml(linkedRiotId)}</strong>
+    </div>
+  `;
+  rankPanel.innerHTML = `
+    <div class="consent-panel">
+      <h3>Private Until Linked</h3>
+      <p>RGTracker does not reveal another player's VALORANT stats unless that player signs in and opts in first.</p>
+      <a class="connect-button connect-button--secondary" href="/auth/logout">Sign out</a>
+    </div>
+  `;
+  poolTitle.textContent = "Privacy";
+  poolCaption.textContent = "";
+  poolList.innerHTML = `<div class="empty">Search League or TFT publicly, or ask this Valorant player to opt in.</div>`;
+  matchCaption.textContent = "";
+  matchList.innerHTML = `<div class="empty">No VALORANT match history is available for non-opted-in accounts.</div>`;
+}
+
 function setProfileGameButtons(game) {
   document.querySelectorAll("[data-profile-game]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.profileGame === game);
@@ -348,6 +433,19 @@ function tftRankQueue(queueType) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function normalizeRiotId(value) {
+  return String(value || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function rsoMessage(issue) {
+  const messages = {
+    not_configured: "RSO is not configured yet. Add Riot RSO client credentials before live VALORANT account linking.",
+    invalid_state: "The Riot sign-in session expired. Please start the connection flow again.",
+    token_exchange_failed: "Riot sign-in could not be completed. Please verify the RSO redirect URI and client credentials."
+  };
+  return messages[issue] || `Riot sign-in returned: ${issue}`;
 }
 
 function gameLabelFor(game) {
@@ -393,9 +491,4 @@ function summaryStatsFor(data) {
     ["ACS", data.overview.acs],
     ["HS%", `${data.overview.headshotRate}%`]
   ];
-}
-
-function buildTrackerValorantUrl(riotId) {
-  const normalized = riotId.replace(/\s+/g, "");
-  return `https://tracker.gg/valorant/profile/riot/${encodeURIComponent(normalized)}/overview`;
 }

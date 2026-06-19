@@ -437,6 +437,71 @@ input {
   color: var(--muted);
 }
 
+.consent-panel h3,
+.legal-page h1 {
+  margin: 0 0 12px;
+  font-size: 28px;
+}
+
+.consent-panel p,
+.setup-warning,
+.legal-page p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.connect-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin-top: 12px;
+  padding: 0 18px;
+  border-radius: 6px;
+  color: #fff;
+  background: var(--red);
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.connect-button--secondary {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.setup-warning {
+  padding: 14px;
+  border: 1px solid rgba(242, 198, 109, 0.4);
+  border-radius: 6px;
+  background: rgba(242, 198, 109, 0.08);
+}
+
+.site-footer {
+  width: min(1120px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 28px 0 40px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.site-footer nav {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.site-footer a,
+.legal-page a {
+  color: var(--text);
+}
+
+.legal-page {
+  width: min(760px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 48px 0 80px;
+}
+
 @media (max-width: 820px) {
   .hero {
     min-height: 100svh;

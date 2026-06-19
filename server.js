@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import syncFs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,6 +14,12 @@ const PORT = Number(process.env.PORT || 5173);
 const RIOT_API_KEY = process.env.RIOT_API_KEY || "";
 const DEFAULT_ROUTING = process.env.DEFAULT_ROUTING || "americas";
 const DEFAULT_LOL_PLATFORM = process.env.DEFAULT_LOL_PLATFORM || "na1";
+const RSO_CLIENT_ID = process.env.RSO_CLIENT_ID || "";
+const RSO_CLIENT_SECRET = process.env.RSO_CLIENT_SECRET || "";
+const RSO_REDIRECT_URI = process.env.RSO_REDIRECT_URI || "";
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const sessions = new Map();
+const rsoStates = new Map();
 
 const ROUTING_BY_PLATFORM = {
   br1: "americas",
@@ -65,8 +72,12 @@ function createAppServer() {
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
+      if (url.pathname.startsWith("/auth/")) {
+        await handleAuth(req, url, res);
+        return;
+      }
       if (url.pathname.startsWith("/api/")) {
-        await handleApi(url, res);
+        await handleApi(req, url, res);
         return;
       }
       await serveStatic(url.pathname, res);
@@ -79,7 +90,17 @@ function createAppServer() {
   });
 }
 
-async function handleApi(url, res) {
+async function handleApi(req, url, res) {
+  if (url.pathname === "/api/auth/session") {
+    const session = getSession(req);
+    sendJson(res, 200, {
+      authenticated: Boolean(session),
+      rsoConfigured: hasRsoConfig(),
+      account: session?.account || null
+    });
+    return;
+  }
+
   if (!RIOT_API_KEY) {
     throw publicError(500, "Missing RIOT_API_KEY. Add it to .env before searching Riot profiles.");
   }
@@ -103,15 +124,88 @@ async function handleApi(url, res) {
   }
 
   if (url.pathname === "/api/profile/valorant") {
+    const session = getSession(req);
+    if (!session) {
+      throw publicError(401, "Connect your Riot account before viewing VALORANT stats.");
+    }
     const riotId = parseRiotId(url.searchParams.get("riotId"));
+    if (!sameRiotId(riotId, session.account)) {
+      throw publicError(403, "VALORANT stats are only available for Riot accounts that have opted in through RGTracker.");
+    }
     const routing = url.searchParams.get("routing") || DEFAULT_ROUTING;
     const region = url.searchParams.get("region") || normalizeValorantRegion(routing);
-    const data = await buildValorantProfile(riotId, routing, region);
+    const data = await buildValorantProfile({ gameName: session.account.gameName, tagLine: session.account.tagLine }, routing, region);
     sendJson(res, 200, data);
     return;
   }
 
   throw publicError(404, "Unknown API route.");
+}
+
+async function handleAuth(req, url, res) {
+  if (url.pathname === "/auth/riot/start") {
+    const returnTo = safeReturnPath(url.searchParams.get("returnTo")) || "/valorant";
+    if (!hasRsoConfig()) {
+      redirect(res, appendQuery(returnTo, "rso", "not_configured"));
+      return;
+    }
+    const state = crypto.randomBytes(24).toString("hex");
+    rsoStates.set(state, { returnTo, createdAt: Date.now() });
+    pruneRsoStates();
+    setCookie(res, "rgt_rso_state", state, { maxAge: 600, httpOnly: true, secure: isSecureRequest(req), sameSite: "Lax" });
+    const authorizeUrl = new URL("https://auth.riotgames.com/authorize");
+    authorizeUrl.searchParams.set("client_id", RSO_CLIENT_ID);
+    authorizeUrl.searchParams.set("redirect_uri", RSO_REDIRECT_URI);
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("scope", "openid offline_access");
+    authorizeUrl.searchParams.set("state", state);
+    redirect(res, authorizeUrl.toString());
+    return;
+  }
+
+  if (url.pathname === "/auth/riot/callback") {
+    const error = url.searchParams.get("error");
+    if (error) {
+      clearCookie(res, "rgt_rso_state", { secure: isSecureRequest(req) });
+      redirect(res, `/valorant?rso=${encodeURIComponent(error)}`);
+      return;
+    }
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const cookieState = parseCookies(req.headers.cookie || "").rgt_rso_state;
+    const storedState = state ? rsoStates.get(state) : null;
+    if (!code || !state || !cookieState || cookieState !== state || !storedState) {
+      clearCookie(res, "rgt_rso_state", { secure: isSecureRequest(req) });
+      redirect(res, "/valorant?rso=invalid_state");
+      return;
+    }
+
+    rsoStates.delete(state);
+    clearCookie(res, "rgt_rso_state", { secure: isSecureRequest(req) });
+    try {
+      const token = await exchangeRsoCode(code);
+      const account = await fetchRsoAccount(token.access_token);
+      const sessionId = createSession({ account });
+      setCookie(res, "rgt_session", sessionId, { maxAge: 60 * 60 * 24 * 14, httpOnly: true, secure: isSecureRequest(req), sameSite: "Lax" });
+      const returnTo = storedState.returnTo.includes("riotId=")
+        ? storedState.returnTo
+        : `/valorant?riotId=${encodeURIComponent(`${account.gameName}#${account.tagLine}`)}`;
+      redirect(res, returnTo);
+    } catch {
+      redirect(res, "/valorant?rso=token_exchange_failed");
+    }
+    return;
+  }
+
+  if (url.pathname === "/auth/logout") {
+    const sessionId = parseCookies(req.headers.cookie || "").rgt_session;
+    if (sessionId) sessions.delete(sessionId);
+    clearCookie(res, "rgt_session", { secure: isSecureRequest(req) });
+    redirect(res, "/");
+    return;
+  }
+
+  throw publicError(404, "Unknown auth route.");
 }
 
 async function buildLeagueProfile(riotId, platform, routing) {
@@ -612,6 +706,45 @@ async function riotFetch(url) {
   return response.json();
 }
 
+async function exchangeRsoCode(code) {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: RSO_REDIRECT_URI
+  });
+  const response = await fetch("https://auth.riotgames.com/token", {
+    method: "POST",
+    headers: {
+      "Authorization": `Basic ${Buffer.from(`${RSO_CLIENT_ID}:${RSO_CLIENT_SECRET}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Accept": "application/json"
+    },
+    body
+  });
+  if (!response.ok) {
+    throw publicError(response.status, "RSO token exchange failed.");
+  }
+  return response.json();
+}
+
+async function fetchRsoAccount(accessToken) {
+  const response = await fetch(`https://${DEFAULT_ROUTING}.api.riotgames.com/riot/account/v1/accounts/me`, {
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept": "application/json"
+    }
+  });
+  if (!response.ok) {
+    throw publicError(response.status, "Could not verify the linked Riot account.");
+  }
+  const account = await response.json();
+  return {
+    puuid: account.puuid,
+    gameName: account.gameName,
+    tagLine: account.tagLine
+  };
+}
+
 async function serveStatic(pathname, res) {
   const safePath = pathname === "/" ? "/index.html" : pathname;
   const resolved = path.normalize(path.join(publicDir, safePath));
@@ -637,6 +770,111 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
+function hasRsoConfig() {
+  return Boolean(RSO_CLIENT_ID && RSO_CLIENT_SECRET && RSO_REDIRECT_URI);
+}
+
+function createSession(session) {
+  const sessionId = signSessionId(crypto.randomBytes(32).toString("hex"));
+  sessions.set(sessionId, {
+    account: session.account,
+    createdAt: Date.now()
+  });
+  pruneSessions();
+  return sessionId;
+}
+
+function getSession(req) {
+  const sessionId = parseCookies(req.headers.cookie || "").rgt_session;
+  if (!sessionId || !verifySignedSessionId(sessionId)) return null;
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  if (Date.now() - session.createdAt > 1000 * 60 * 60 * 24 * 14) {
+    sessions.delete(sessionId);
+    return null;
+  }
+  return session;
+}
+
+function signSessionId(id) {
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(id).digest("base64url");
+  return `${id}.${signature}`;
+}
+
+function verifySignedSessionId(value) {
+  const [id, signature] = String(value).split(".");
+  if (!id || !signature) return false;
+  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(id).digest("base64url");
+  if (Buffer.byteLength(signature) !== Buffer.byteLength(expected)) return false;
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
+function setCookie(res, name, value, options = {}) {
+  const parts = [`${name}=${encodeURIComponent(value)}`, "Path=/"];
+  if (options.maxAge) parts.push(`Max-Age=${options.maxAge}`);
+  if (options.httpOnly) parts.push("HttpOnly");
+  if (options.secure) parts.push("Secure");
+  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
+  appendSetCookie(res, parts.join("; "));
+}
+
+function clearCookie(res, name, options = {}) {
+  const parts = [`${name}=`, "Path=/", "Max-Age=0", "HttpOnly", "SameSite=Lax"];
+  if (options.secure) parts.push("Secure");
+  appendSetCookie(res, parts.join("; "));
+}
+
+function appendSetCookie(res, cookie) {
+  const existing = res.getHeader("Set-Cookie");
+  if (!existing) {
+    res.setHeader("Set-Cookie", cookie);
+    return;
+  }
+  res.setHeader("Set-Cookie", Array.isArray(existing) ? [...existing, cookie] : [existing, cookie]);
+}
+
+function parseCookies(header) {
+  return Object.fromEntries(String(header).split(";").map((part) => {
+    const index = part.indexOf("=");
+    if (index === -1) return ["", ""];
+    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+  }).filter(([key]) => key));
+}
+
+function isSecureRequest(req) {
+  return req.headers["x-forwarded-proto"] === "https" || String(req.headers.host || "").endsWith(".vercel.app");
+}
+
+function safeReturnPath(value) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "";
+  return value;
+}
+
+function appendQuery(pathname, key, value) {
+  const url = new URL(pathname, "http://local.rgtracker");
+  url.searchParams.set(key, value);
+  return `${url.pathname}${url.search}`;
+}
+
+function pruneRsoStates() {
+  const cutoff = Date.now() - 1000 * 60 * 10;
+  for (const [state, value] of rsoStates) {
+    if (value.createdAt < cutoff) rsoStates.delete(state);
+  }
+}
+
+function pruneSessions() {
+  const cutoff = Date.now() - 1000 * 60 * 60 * 24 * 14;
+  for (const [sessionId, value] of sessions) {
+    if (value.createdAt < cutoff) sessions.delete(sessionId);
+  }
+}
+
 function parseRiotId(value) {
   const raw = String(value || "").trim();
   const separator = raw.includes("#") ? "#" : raw.includes("-") ? "-" : "";
@@ -648,6 +886,15 @@ function parseRiotId(value) {
     throw publicError(400, "Enter a Riot ID as gameName#tagLine.");
   }
   return { gameName: gameName.trim(), tagLine: tagLine.trim() };
+}
+
+function sameRiotId(left, right) {
+  return normalizeRiotIdPart(left.gameName) === normalizeRiotIdPart(right.gameName)
+    && normalizeRiotIdPart(left.tagLine) === normalizeRiotIdPart(right.tagLine);
+}
+
+function normalizeRiotIdPart(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function publicError(status, publicMessage) {
