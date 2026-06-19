@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RGTracker</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero" id="home">
+        <div class="hero__content">
+          <p class="eyebrow">Riot ID lookup</p>
+          <h1>RGTracker</h1>
+          <p class="hero__copy">Search one Riot ID and jump into a focused competitive profile for Valorant or League.</p>
+          <form class="search-panel" id="landingSearchForm">
+            <label class="search-label" for="riotId">Riot ID</label>
+            <input id="riotId" name="riotId" autocomplete="off" spellcheck="false" placeholder="kappa#44444">
+            <div class="button-row">
+              <button type="submit" data-game="valorant" class="game-button game-button--valorant">Valorant</button>
+              <button type="submit" data-game="league" class="game-button game-button--league">League</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="profile" id="profile" hidden>
+        <nav class="profile-search" aria-label="Profile search">
+          <a class="brand-link" href="/">RGTracker</a>
+          <form class="profile-search__form" id="profileSearchForm">
+            <label class="sr-only" for="profileRiotId">Riot ID</label>
+            <input id="profileRiotId" name="profileRiotId" autocomplete="off" spellcheck="false" placeholder="Search Riot ID">
+            <button type="submit" data-profile-game="valorant" class="mini-game-button mini-game-button--valorant">Valorant</button>
+            <button type="submit" data-profile-game="league" class="mini-game-button mini-game-button--league">League</button>
+          </form>
+        </nav>
+        <header class="profile-header">
+          <div>
+            <p class="eyebrow" id="gameLabel">Profile</p>
+            <h2 id="profileTitle">Loading</h2>
+            <p id="profileSubtitle"></p>
+          </div>
+          <div class="status-pill" id="updatedAt"></div>
+        </header>
+
+        <div class="error-banner" id="errorBanner" hidden></div>
+        <div class="loading" id="loading" hidden>Loading Riot profile...</div>
+
+        <div class="profile-grid" id="profileContent" hidden>
+          <section class="summary-band" id="summaryBand"></section>
+          <section class="rank-panel" id="rankPanel"></section>
+          <section class="table-panel">
+            <div class="panel-heading">
+              <h3 id="poolTitle">Top Picks</h3>
+              <span id="poolCaption"></span>
+            </div>
+            <div id="poolList"></div>
+          </section>
+          <section class="matches-panel">
+            <div class="panel-heading">
+              <h3>Recent Matches</h3>
+              <span id="matchCaption"></span>
+            </div>
+            <div id="matchList"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
