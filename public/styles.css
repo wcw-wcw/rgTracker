@@ -293,6 +293,13 @@ input {
   align-items: start;
 }
 
+.profile-left {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
+}
+
 .summary-band,
 .rank-panel,
 .table-panel,
@@ -303,7 +310,6 @@ input {
 }
 
 .summary-band {
-  grid-column: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -339,14 +345,8 @@ input {
   padding: 18px;
 }
 
-.rank-panel,
-.table-panel {
-  grid-column: 1;
-}
-
 .matches-panel {
-  grid-column: 2;
-  grid-row: 1 / span 3;
+  min-width: 0;
 }
 
 .rank-card {
@@ -498,6 +498,14 @@ input {
   overflow: hidden;
 }
 
+.league-match-card summary {
+  list-style: none;
+}
+
+.league-match-card summary::-webkit-details-marker {
+  display: none;
+}
+
 .league-match-card--loss {
   border-left-color: var(--red);
   background: rgba(255, 70, 85, 0.13);
@@ -505,10 +513,11 @@ input {
 
 .league-match-summary {
   display: grid;
-  grid-template-columns: 96px minmax(180px, 1fr) 112px minmax(170px, 0.78fr) 140px;
-  gap: 14px;
+  grid-template-columns: 80px minmax(130px, 1fr) 100px minmax(140px, 0.9fr) 78px 86px;
+  gap: 10px;
   align-items: center;
   padding: 14px;
+  cursor: pointer;
 }
 
 .league-match-meta strong,
@@ -566,8 +575,9 @@ input {
   border-radius: 5px;
   color: var(--muted);
   background: rgba(0, 0, 0, 0.35);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
+  overflow: hidden;
 }
 
 .item-row span.is-empty {
@@ -588,12 +598,41 @@ input {
 
 .objective-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 5px;
+}
+
+.expand-pill {
+  justify-self: end;
+  min-width: 88px;
+  padding: 8px 10px;
+  border: 1px solid rgba(78, 165, 255, 0.45);
+  border-radius: 6px;
+  color: var(--text);
+  background: rgba(78, 165, 255, 0.16);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.league-match-card[open] .expand-pill {
+  border-color: rgba(242, 198, 109, 0.48);
+  background: rgba(242, 198, 109, 0.12);
+}
+
+.league-match-card[open] .expand-pill {
+  font-size: 0;
+}
+
+.league-match-card[open] .expand-pill::after {
+  content: "Hide stats";
+  font-size: 12px;
 }
 
 .match-scoreboard {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .scoreboard-team {
@@ -623,7 +662,7 @@ input {
 }
 
 .scoreboard-table {
-  min-width: 980px;
+  min-width: 1020px;
 }
 
 .scoreboard-row {

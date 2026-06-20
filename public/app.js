@@ -353,8 +353,8 @@ function renderMatches(data) {
 
 function renderLeagueMatch(match) {
   return `
-    <article class="league-match-card ${match.win ? "league-match-card--win" : "league-match-card--loss"}">
-      <div class="league-match-summary">
+    <details class="league-match-card ${match.win ? "league-match-card--win" : "league-match-card--loss"}">
+      <summary class="league-match-summary">
         <div class="league-match-meta">
           <strong>${escapeHtml(match.mode)}</strong>
           <span>${escapeHtml(match.result)}</span>
@@ -387,9 +387,10 @@ function renderLeagueMatch(match) {
           <span>Barons ${match.teamObjectives?.barons ?? 0}</span>
           <span>Inhibs ${match.teamObjectives?.inhibitors ?? 0}</span>
         </div>
-      </div>
+        <span class="expand-pill">Show stats</span>
+      </summary>
       <div class="match-scoreboard">${renderScoreboard(match)}</div>
-    </article>
+    </details>
   `;
 }
 
@@ -444,7 +445,11 @@ function renderScoreboardPlayer(player, currentPuuid) {
 function renderItemSlots(items) {
   const slots = [...(items || [])];
   while (slots.length < 7) slots.push("");
-  return slots.slice(0, 7).map((item) => `<span class="${item ? "" : "is-empty"}">${item || ""}</span>`).join("");
+  return slots.slice(0, 7).map((item) => `<span class="${item ? "" : "is-empty"}" title="${item ? `Item ${item}` : "Empty item slot"}">${item ? itemLabel(item) : ""}</span>`).join("");
+}
+
+function itemLabel(item) {
+  return String(item).slice(-3);
 }
 
 function multiKillBadge(match) {
