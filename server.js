@@ -320,6 +320,11 @@ function summarizeLolMatch(match, puuid) {
   if (!participant) return null;
   const durationMinutes = Math.max(1, (match.info.gameDuration || 0) / 60);
   const team = match.info.teams?.find((entry) => entry.teamId === participant.teamId);
+  const participants = (match.info.participants || []).map((player) => summarizeLolParticipant(player, durationMinutes));
+  const allyTeam = participants.filter((player) => player.teamId === participant.teamId);
+  const enemyTeam = participants.filter((player) => player.teamId !== participant.teamId);
+  const teamDamage = allyTeam.reduce((sum, player) => sum + player.damage, 0);
+  const teamGold = allyTeam.reduce((sum, player) => sum + player.gold, 0);
 
   return {
     id: match.metadata.matchId,
@@ -335,13 +340,37 @@ function summarizeLolMatch(match, puuid) {
     cs: participant.totalMinionsKilled + participant.neutralMinionsKilled,
     csPerMin: ratio(participant.totalMinionsKilled + participant.neutralMinionsKilled, durationMinutes),
     visionScore: participant.visionScore,
+    wardsPlaced: participant.wardsPlaced,
+    wardsKilled: participant.wardsKilled,
     damage: participant.totalDamageDealtToChampions,
+    damageTaken: participant.totalDamageTaken,
+    damageShare: percent(participant.totalDamageDealtToChampions, teamDamage),
     gold: participant.goldEarned,
+    goldShare: percent(participant.goldEarned, teamGold),
     killParticipation: percent(participant.kills + participant.assists, team?.objectives?.champion?.kills || 0),
+    items: itemIds(participant),
+    summonerSpells: [participant.summoner1Id, participant.summoner2Id],
+    doubleKills: participant.doubleKills,
+    tripleKills: participant.tripleKills,
+    quadraKills: participant.quadraKills,
+    pentaKills: participant.pentaKills,
+    largestMultiKill: participant.largestMultiKill,
+    turretKills: participant.turretKills,
+    inhibitorKills: participant.inhibitorKills,
+    neutralMinions: participant.neutralMinionsKilled,
     duration: match.info.gameDuration,
     createdAt: match.info.gameCreation,
     result: participant.win ? "Victory" : "Defeat",
-    teamKills: team?.objectives?.champion?.kills || 0
+    teamKills: team?.objectives?.champion?.kills || 0,
+    teamObjectives: team ? {
+      towers: team.objectives?.tower?.kills || 0,
+      dragons: team.objectives?.dragon?.kills || 0,
+      barons: team.objectives?.baron?.kills || 0,
+      inhibitors: team.objectives?.inhibitor?.kills || 0,
+      riftHeralds: team.objectives?.riftHerald?.kills || 0
+    } : null,
+    allyTeam,
+    enemyTeam
   };
 }
 
@@ -360,7 +389,13 @@ function summarizeLolOverview(matches) {
       avgKillParticipation: 0,
       avgKills: 0,
       avgDeaths: 0,
-      avgAssists: 0
+      avgAssists: 0,
+      avgDamageShare: 0,
+      avgGoldShare: 0,
+      avgWardsPlaced: 0,
+      avgWardsKilled: 0,
+      preferredRole: "Fill",
+      roleDistribution: []
     };
   }
 
@@ -374,8 +409,16 @@ function summarizeLolOverview(matches) {
     acc.damage += match.damage;
     acc.gold += match.gold;
     acc.killParticipation += match.killParticipation;
+    acc.damageShare += match.damageShare;
+    acc.goldShare += match.goldShare;
+    acc.wardsPlaced += match.wardsPlaced;
+    acc.wardsKilled += match.wardsKilled;
+    acc.roles.set(match.role, (acc.roles.get(match.role) || 0) + 1);
     return acc;
-  }, { wins: 0, kills: 0, deaths: 0, assists: 0, csMin: 0, vision: 0, damage: 0, gold: 0, killParticipation: 0 });
+  }, { wins: 0, kills: 0, deaths: 0, assists: 0, csMin: 0, vision: 0, damage: 0, gold: 0, killParticipation: 0, damageShare: 0, goldShare: 0, wardsPlaced: 0, wardsKilled: 0, roles: new Map() });
+  const roleDistribution = Array.from(totals.roles.entries())
+    .map(([role, games]) => ({ role: roleName(role), games, rate: percent(games, matches.length) }))
+    .sort((a, b) => b.games - a.games);
 
   return {
     matches: matches.length,
@@ -390,20 +433,31 @@ function summarizeLolOverview(matches) {
     avgKillParticipation: average(totals.killParticipation, matches.length),
     avgKills: average(totals.kills, matches.length),
     avgDeaths: average(totals.deaths, matches.length),
-    avgAssists: average(totals.assists, matches.length)
+    avgAssists: average(totals.assists, matches.length),
+    avgDamageShare: average(totals.damageShare, matches.length),
+    avgGoldShare: average(totals.goldShare, matches.length),
+    avgWardsPlaced: average(totals.wardsPlaced, matches.length),
+    avgWardsKilled: average(totals.wardsKilled, matches.length),
+    preferredRole: roleDistribution[0]?.role || "Fill",
+    roleDistribution
   };
 }
 
 function summarizeChampionPool(matches) {
   const byChampion = new Map();
   for (const match of matches) {
-    const entry = byChampion.get(match.champion) || { name: match.champion, games: 0, wins: 0, kills: 0, deaths: 0, assists: 0, avgDamage: 0 };
+    const entry = byChampion.get(match.champion) || { name: match.champion, games: 0, wins: 0, kills: 0, deaths: 0, assists: 0, avgDamage: 0, cs: 0, csMin: 0, gold: 0, killParticipation: 0, roles: new Map() };
     entry.games += 1;
     entry.wins += match.win ? 1 : 0;
     entry.kills += match.kills;
     entry.deaths += match.deaths;
     entry.assists += match.assists;
     entry.avgDamage += match.damage;
+    entry.cs += match.cs;
+    entry.csMin += match.csPerMin;
+    entry.gold += match.gold;
+    entry.killParticipation += match.killParticipation;
+    entry.roles.set(match.role, (entry.roles.get(match.role) || 0) + 1);
     byChampion.set(match.champion, entry);
   }
 
@@ -412,10 +466,47 @@ function summarizeChampionPool(matches) {
       ...entry,
       winRate: percent(entry.wins, entry.games),
       kda: ratio(entry.kills + entry.assists, entry.deaths),
-      avgDamage: Math.round(average(entry.avgDamage, entry.games))
+      avgKills: average(entry.kills, entry.games),
+      avgDeaths: average(entry.deaths, entry.games),
+      avgAssists: average(entry.assists, entry.games),
+      avgDamage: Math.round(average(entry.avgDamage, entry.games)),
+      avgCs: Math.round(average(entry.cs, entry.games)),
+      avgCsMin: average(entry.csMin, entry.games),
+      avgGold: Math.round(average(entry.gold, entry.games)),
+      avgKillParticipation: average(entry.killParticipation, entry.games),
+      primaryRole: roleName(Array.from(entry.roles.entries()).sort((a, b) => b[1] - a[1])[0]?.[0])
     }))
     .sort((a, b) => b.games - a.games || b.winRate - a.winRate)
     .slice(0, 6);
+}
+
+function summarizeLolParticipant(player, durationMinutes) {
+  const cs = player.totalMinionsKilled + player.neutralMinionsKilled;
+  return {
+    puuid: player.puuid,
+    teamId: player.teamId,
+    riotId: player.riotIdGameName && player.riotIdTagline ? `${player.riotIdGameName}#${player.riotIdTagline}` : player.summonerName,
+    champion: player.championName,
+    role: roleName(player.teamPosition || player.individualPosition || "FILL"),
+    level: player.champLevel,
+    kills: player.kills,
+    deaths: player.deaths,
+    assists: player.assists,
+    kda: ratio(player.kills + player.assists, player.deaths),
+    damage: player.totalDamageDealtToChampions,
+    damageTaken: player.totalDamageTaken,
+    gold: player.goldEarned,
+    cs,
+    csPerMin: ratio(cs, durationMinutes),
+    visionScore: player.visionScore,
+    wardsPlaced: player.wardsPlaced,
+    wardsKilled: player.wardsKilled,
+    items: itemIds(player)
+  };
+}
+
+function itemIds(player) {
+  return [player.item0, player.item1, player.item2, player.item3, player.item4, player.item5, player.item6].filter(Boolean);
 }
 
 function summarizeValorantMatch(match, puuid, contentNames) {
@@ -921,6 +1012,21 @@ function percent(value, total) {
 
 function queuePriority(queue) {
   return queue === "RANKED_SOLO_5x5" ? 0 : queue === "RANKED_FLEX_SR" ? 1 : 2;
+}
+
+function roleName(role) {
+  const roles = {
+    TOP: "Top",
+    JUNGLE: "Jungle",
+    MIDDLE: "Middle",
+    MID: "Middle",
+    BOTTOM: "Bottom",
+    ADC: "Bottom",
+    UTILITY: "Support",
+    SUPPORT: "Support",
+    FILL: "Fill"
+  };
+  return roles[role] || titleCase(role || "Fill");
 }
 
 function queueName(queueId) {

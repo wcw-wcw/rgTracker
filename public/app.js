@@ -219,6 +219,10 @@ function renderPool(data) {
     renderTftPools(data);
     return;
   }
+  if (data.game === "league") {
+    renderLeaguePools(data);
+    return;
+  }
   const items = data.game === "league" ? data.championPool : data.game === "tft" ? data.traitPool : data.agentPool;
   poolTitle.textContent = data.game === "league" ? "Champion Pool" : data.game === "tft" ? "Trait Pool" : "Agent Pool";
   poolCaption.textContent = items.length ? `${items.length} picks` : "";
@@ -236,6 +240,44 @@ function renderPool(data) {
       <span>${data.game === "league" ? formatNumber(item.avgDamage) + " dmg" : data.game === "tft" ? item.winRate + "% win" : item.acs + " ACS"}</span>
     </div>
   `).join("");
+}
+
+function renderLeaguePools(data) {
+  poolTitle.textContent = "Champions & Roles";
+  poolCaption.textContent = `${data.championPool.length} champions`;
+  const roles = data.overview.roleDistribution || [];
+  const roleRows = roles.map((role) => `
+    <div class="role-chip">
+      <strong>${escapeHtml(role.role)}</strong>
+      <span>${role.games} games · ${role.rate}%</span>
+    </div>
+  `).join("");
+  const championRows = data.championPool.map((item) => `
+    <div class="champion-row">
+      <div class="champion-face">${championInitial(item.name)}</div>
+      <div>
+        <strong>${escapeHtml(item.name)}</strong>
+        <span class="pool-meta">${item.games} games · ${item.primaryRole} · ${item.avgCs} CS (${item.avgCsMin}/m)</span>
+      </div>
+      <div class="champion-stat">
+        <strong>${item.kda}:1</strong>
+        <span>${item.avgKills}/${item.avgDeaths}/${item.avgAssists}</span>
+      </div>
+      <div class="champion-stat">
+        <strong>${item.winRate}%</strong>
+        <span>${item.avgKillParticipation}% KP</span>
+      </div>
+      <div class="champion-stat">
+        <strong>${formatNumber(item.avgDamage)}</strong>
+        <span>dmg</span>
+      </div>
+    </div>
+  `).join("");
+  poolList.innerHTML = `
+    <div class="role-grid">${roleRows || `<div class="empty">No role data available yet.</div>`}</div>
+    <div class="pool-subhead">Recent Champion Performance</div>
+    ${championRows || `<div class="empty">No champion data available yet.</div>`}
+  `;
 }
 
 function renderTftPools(data) {
@@ -280,17 +322,7 @@ function renderMatches(data) {
   matchList.innerHTML = matches.map((match) => {
     const lossClass = match.win ? "" : " result--loss";
     if (data.game === "league") {
-      return `
-        <div class="match-row">
-          <span class="result${lossClass}">${match.result}</span>
-          <div>
-            <strong>${escapeHtml(match.champion)}</strong>
-            <span class="match-meta">${escapeHtml(match.mode)} · ${escapeHtml(match.role)}</span>
-          </div>
-          <span>${match.kills}/${match.deaths}/${match.assists}</span>
-          <span>${match.csPerMin} CS/min</span>
-        </div>
-      `;
+      return renderLeagueMatch(match, lossClass);
     }
     if (data.game === "tft") {
       return `
@@ -317,6 +349,55 @@ function renderMatches(data) {
       </div>
     `;
   }).join("");
+}
+
+function renderLeagueMatch(match, lossClass) {
+  return `
+    <article class="league-match-card ${match.win ? "league-match-card--win" : "league-match-card--loss"}">
+      <div class="league-match-meta">
+        <strong>${escapeHtml(match.mode)}</strong>
+        <span>${escapeHtml(match.result)}</span>
+        <span>${formatDuration(match.duration)}</span>
+      </div>
+      <div class="league-match-main">
+        <div class="champion-face champion-face--large">${championInitial(match.champion)}</div>
+        <div>
+          <strong>${escapeHtml(match.champion)}</strong>
+          <span class="match-meta">${escapeHtml(match.role)} · ${match.items.length} items</span>
+          <div class="item-row">${match.items.map((item) => `<span>${item}</span>`).join("")}</div>
+        </div>
+      </div>
+      <div class="league-kda">
+        <strong>${match.kills}<span>/</span>${match.deaths}<span>/</span>${match.assists}</strong>
+        <small>${match.kda}:1 KDA</small>
+      </div>
+      <div class="league-extra">
+        <span>P/Kill ${match.killParticipation}%</span>
+        <span>CS ${match.cs} (${match.csPerMin}/m)</span>
+        <span>Vision ${match.visionScore} · Wards ${match.wardsPlaced}/${match.wardsKilled}</span>
+        <span>Damage ${formatNumber(match.damage)} (${match.damageShare}%)</span>
+        <span>Gold ${formatNumber(match.gold)} (${match.goldShare}%)</span>
+      </div>
+      <div class="objective-row">
+        <span>Towers ${match.teamObjectives?.towers ?? 0}</span>
+        <span>Dragons ${match.teamObjectives?.dragons ?? 0}</span>
+        <span>Barons ${match.teamObjectives?.barons ?? 0}</span>
+        <span>Inhibs ${match.teamObjectives?.inhibitors ?? 0}</span>
+      </div>
+      <div class="team-preview">
+        <div>${participantPreview(match.allyTeam)}</div>
+        <div>${participantPreview(match.enemyTeam)}</div>
+      </div>
+    </article>
+  `;
+}
+
+function participantPreview(players) {
+  return (players || []).map((player) => `
+    <span class="participant-chip" title="${escapeHtml(player.riotId)}">
+      <b>${championInitial(player.champion)}</b>${escapeHtml(player.champion)}
+    </span>
+  `).join("");
 }
 
 function showLandingError(message) {
@@ -435,6 +516,16 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function formatDuration(seconds) {
+  const mins = Math.floor((seconds || 0) / 60);
+  const secs = Math.floor((seconds || 0) % 60);
+  return `${mins}m ${String(secs).padStart(2, "0")}s`;
+}
+
+function championInitial(name) {
+  return String(name || "?").slice(0, 1).toUpperCase();
+}
+
 function normalizeRiotId(value) {
   return String(value || "").replace(/\s+/g, "").toLowerCase();
 }
@@ -476,9 +567,13 @@ function summaryStatsFor(data) {
       ["Record", `${data.overview.wins}W ${data.overview.losses}L`],
       ["Avg KDA", data.overview.avgKda],
       ["Avg K / D / A", `${data.overview.avgKills}/${data.overview.avgDeaths}/${data.overview.avgAssists}`],
+      ["Main Role", data.overview.preferredRole],
       ["CS / Min", data.overview.avgCsMin],
       ["Avg Vision", data.overview.avgVision],
+      ["Wards", `${data.overview.avgWardsPlaced}/${data.overview.avgWardsKilled}`],
       ["Kill Part.", `${data.overview.avgKillParticipation}%`],
+      ["Damage Share", `${data.overview.avgDamageShare}%`],
+      ["Gold Share", `${data.overview.avgGoldShare}%`],
       ["Avg Gold", formatNumber(data.overview.avgGold)],
       ["Avg Damage", formatNumber(data.overview.avgDamage)]
     ];
