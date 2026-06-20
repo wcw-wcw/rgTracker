@@ -322,7 +322,7 @@ function renderMatches(data) {
   matchList.innerHTML = matches.map((match) => {
     const lossClass = match.win ? "" : " result--loss";
     if (data.game === "league") {
-      return renderLeagueMatch(match, lossClass);
+      return renderLeagueMatch(match);
     }
     if (data.game === "tft") {
       return `
@@ -351,53 +351,113 @@ function renderMatches(data) {
   }).join("");
 }
 
-function renderLeagueMatch(match, lossClass) {
+function renderLeagueMatch(match) {
   return `
     <article class="league-match-card ${match.win ? "league-match-card--win" : "league-match-card--loss"}">
-      <div class="league-match-meta">
-        <strong>${escapeHtml(match.mode)}</strong>
-        <span>${escapeHtml(match.result)}</span>
-        <span>${formatDuration(match.duration)}</span>
-      </div>
-      <div class="league-match-main">
-        <div class="champion-face champion-face--large">${championInitial(match.champion)}</div>
-        <div>
-          <strong>${escapeHtml(match.champion)}</strong>
-          <span class="match-meta">${escapeHtml(match.role)} · ${match.items.length} items</span>
-          <div class="item-row">${match.items.map((item) => `<span>${item}</span>`).join("")}</div>
+      <div class="league-match-summary">
+        <div class="league-match-meta">
+          <strong>${escapeHtml(match.mode)}</strong>
+          <span>${escapeHtml(match.result)}</span>
+          <span>${formatDuration(match.duration)}</span>
+          <span>${match.participantCount} players</span>
+        </div>
+        <div class="league-match-main">
+          <div class="champion-face champion-face--large">${championInitial(match.champion)}</div>
+          <div>
+            <strong>${escapeHtml(match.champion)}</strong>
+            <span class="match-meta">${escapeHtml(match.role)} · ${match.items.length} items</span>
+            <div class="item-row">${renderItemSlots(match.items)}</div>
+          </div>
+        </div>
+        <div class="league-kda">
+          <strong>${match.kills}<span>/</span>${match.deaths}<span>/</span>${match.assists}</strong>
+          <small>${match.kda}:1 KDA</small>
+          ${multiKillBadge(match)}
+        </div>
+        <div class="league-extra">
+          <span>P/Kill ${match.killParticipation}%</span>
+          <span>CS ${match.cs} (${match.csPerMin}/m)</span>
+          <span>Vision ${match.visionScore} · Wards ${match.wardsPlaced}/${match.wardsKilled}</span>
+          <span>Damage ${formatNumber(match.damage)} (${match.damageShare}%)</span>
+          <span>Gold ${formatNumber(match.gold)} (${match.goldShare}%)</span>
+        </div>
+        <div class="objective-row">
+          <span>Towers ${match.teamObjectives?.towers ?? 0}</span>
+          <span>Dragons ${match.teamObjectives?.dragons ?? 0}</span>
+          <span>Barons ${match.teamObjectives?.barons ?? 0}</span>
+          <span>Inhibs ${match.teamObjectives?.inhibitors ?? 0}</span>
         </div>
       </div>
-      <div class="league-kda">
-        <strong>${match.kills}<span>/</span>${match.deaths}<span>/</span>${match.assists}</strong>
-        <small>${match.kda}:1 KDA</small>
-      </div>
-      <div class="league-extra">
-        <span>P/Kill ${match.killParticipation}%</span>
-        <span>CS ${match.cs} (${match.csPerMin}/m)</span>
-        <span>Vision ${match.visionScore} · Wards ${match.wardsPlaced}/${match.wardsKilled}</span>
-        <span>Damage ${formatNumber(match.damage)} (${match.damageShare}%)</span>
-        <span>Gold ${formatNumber(match.gold)} (${match.goldShare}%)</span>
-      </div>
-      <div class="objective-row">
-        <span>Towers ${match.teamObjectives?.towers ?? 0}</span>
-        <span>Dragons ${match.teamObjectives?.dragons ?? 0}</span>
-        <span>Barons ${match.teamObjectives?.barons ?? 0}</span>
-        <span>Inhibs ${match.teamObjectives?.inhibitors ?? 0}</span>
-      </div>
-      <div class="team-preview">
-        <div>${participantPreview(match.allyTeam)}</div>
-        <div>${participantPreview(match.enemyTeam)}</div>
-      </div>
+      <div class="match-scoreboard">${renderScoreboard(match)}</div>
     </article>
   `;
 }
 
-function participantPreview(players) {
-  return (players || []).map((player) => `
-    <span class="participant-chip" title="${escapeHtml(player.riotId)}">
-      <b>${championInitial(player.champion)}</b>${escapeHtml(player.champion)}
-    </span>
+function renderScoreboard(match) {
+  return (match.participantTeams || []).map((team) => `
+    <section class="scoreboard-team ${team.won ? "scoreboard-team--win" : "scoreboard-team--loss"}">
+      <header class="scoreboard-team__header">
+        <strong>${escapeHtml(team.label)}</strong>
+        <span>${team.totals.kills}/${team.totals.deaths}/${team.totals.assists}</span>
+        <span>${formatNumber(team.totals.damage)} dmg</span>
+        <span>${formatNumber(team.totals.gold)} gold</span>
+        ${team.objectives ? `<span>D ${team.objectives.dragons} · B ${team.objectives.barons} · T ${team.objectives.towers}</span>` : ""}
+      </header>
+      <div class="scoreboard-table">
+        <div class="scoreboard-row scoreboard-row--head">
+          <span>Player</span>
+          <span>KDA</span>
+          <span>Damage</span>
+          <span>Gold</span>
+          <span>CS</span>
+          <span>Wards</span>
+          <span>Build</span>
+        </div>
+        ${team.players.map((player) => renderScoreboardPlayer(player, match.accountPuuid)).join("")}
+      </div>
+    </section>
   `).join("");
+}
+
+function renderScoreboardPlayer(player, currentPuuid) {
+  const isCurrentPlayer = player.puuid && player.puuid === currentPuuid;
+  return `
+    <div class="scoreboard-row ${isCurrentPlayer ? "scoreboard-row--current" : ""}">
+      <div class="scoreboard-player">
+        <div class="champion-face">${championInitial(player.champion)}</div>
+        <div>
+          <strong title="${escapeHtml(player.riotId)}">${escapeHtml(truncateName(player.riotId))}</strong>
+          <span>${escapeHtml(player.champion)} · Lv ${player.level} · ${escapeHtml(player.role)}</span>
+          <div class="spell-row">${[...(player.summonerSpells || []), ...(player.perks || [])].slice(0, 4).map((id) => `<i>${id}</i>`).join("")}</div>
+        </div>
+      </div>
+      <div><strong>${player.kills}/${player.deaths}/${player.assists}</strong><span>${player.kda}:1</span></div>
+      <div><strong>${formatNumber(player.damage)}</strong><span>${formatNumber(player.damageTaken)} taken</span></div>
+      <div><strong>${formatNumber(player.gold)}</strong></div>
+      <div><strong>${player.cs}</strong><span>${player.csPerMin}/m</span></div>
+      <div><strong>${player.visionScore}</strong><span>${player.wardsPlaced}/${player.wardsKilled}</span></div>
+      <div class="item-row item-row--scoreboard">${renderItemSlots(player.items)}</div>
+    </div>
+  `;
+}
+
+function renderItemSlots(items) {
+  const slots = [...(items || [])];
+  while (slots.length < 7) slots.push("");
+  return slots.slice(0, 7).map((item) => `<span class="${item ? "" : "is-empty"}">${item || ""}</span>`).join("");
+}
+
+function multiKillBadge(match) {
+  if (match.pentaKills) return `<em class="kill-badge">Penta kill</em>`;
+  if (match.quadraKills) return `<em class="kill-badge">Quadra kill</em>`;
+  if (match.tripleKills) return `<em class="kill-badge">Triple kill</em>`;
+  if (match.doubleKills) return `<em class="kill-badge">Double kill</em>`;
+  return "";
+}
+
+function truncateName(value) {
+  const raw = String(value || "Unknown");
+  return raw.length > 18 ? `${raw.slice(0, 16)}...` : raw;
 }
 
 function showLandingError(message) {

@@ -321,6 +321,7 @@ function summarizeLolMatch(match, puuid) {
   const durationMinutes = Math.max(1, (match.info.gameDuration || 0) / 60);
   const team = match.info.teams?.find((entry) => entry.teamId === participant.teamId);
   const participants = (match.info.participants || []).map((player) => summarizeLolParticipant(player, durationMinutes));
+  const participantTeams = summarizeParticipantTeams(participants, match.info.teams || []);
   const allyTeam = participants.filter((player) => player.teamId === participant.teamId);
   const enemyTeam = participants.filter((player) => player.teamId !== participant.teamId);
   const teamDamage = allyTeam.reduce((sum, player) => sum + player.damage, 0);
@@ -370,7 +371,10 @@ function summarizeLolMatch(match, puuid) {
       riftHeralds: team.objectives?.riftHerald?.kills || 0
     } : null,
     allyTeam,
-    enemyTeam
+    enemyTeam,
+    participantTeams,
+    participantCount: participants.length,
+    accountPuuid: puuid
   };
 }
 
@@ -488,6 +492,10 @@ function summarizeLolParticipant(player, durationMinutes) {
     riotId: player.riotIdGameName && player.riotIdTagline ? `${player.riotIdGameName}#${player.riotIdTagline}` : player.summonerName,
     champion: player.championName,
     role: roleName(player.teamPosition || player.individualPosition || "FILL"),
+    placement: player.placement || null,
+    subteamPlacement: player.subteamPlacement || null,
+    playerSubteamId: player.playerSubteamId || null,
+    win: Boolean(player.win),
     level: player.champLevel,
     kills: player.kills,
     deaths: player.deaths,
@@ -501,12 +509,73 @@ function summarizeLolParticipant(player, durationMinutes) {
     visionScore: player.visionScore,
     wardsPlaced: player.wardsPlaced,
     wardsKilled: player.wardsKilled,
-    items: itemIds(player)
+    summonerSpells: [player.summoner1Id, player.summoner2Id],
+    perks: [
+      player.perks?.styles?.[0]?.selections?.[0]?.perk,
+      player.perks?.styles?.[1]?.style
+    ].filter(Boolean),
+    items: itemIds(player),
+    rank: player.rank || "",
+    riotIdGameName: player.riotIdGameName || "",
+    riotIdTagline: player.riotIdTagline || ""
   };
 }
 
 function itemIds(player) {
   return [player.item0, player.item1, player.item2, player.item3, player.item4, player.item5, player.item6].filter(Boolean);
+}
+
+function summarizeParticipantTeams(participants, teams) {
+  const arenaGroups = new Map();
+  for (const player of participants) {
+    if (player.playerSubteamId || player.subteamPlacement) {
+      const key = player.playerSubteamId || player.teamId;
+      const entry = arenaGroups.get(key) || {
+        id: key,
+        label: player.subteamPlacement ? `#${player.subteamPlacement}` : `Team ${key}`,
+        placement: player.subteamPlacement || 99,
+        won: player.win,
+        players: []
+      };
+      entry.players.push(player);
+      entry.won = entry.won || player.win;
+      arenaGroups.set(key, entry);
+    }
+  }
+  if (arenaGroups.size > 2) {
+    return Array.from(arenaGroups.values())
+      .sort((a, b) => a.placement - b.placement)
+      .map((team) => ({ ...team, totals: participantTotals(team.players) }));
+  }
+
+  return teams.map((team) => {
+    const players = participants.filter((player) => player.teamId === team.teamId);
+    return {
+      id: team.teamId,
+      label: team.teamId === 100 ? "Blue Team" : team.teamId === 200 ? "Red Team" : `Team ${team.teamId}`,
+      placement: team.win ? 1 : 2,
+      won: team.win,
+      objectives: {
+        towers: team.objectives?.tower?.kills || 0,
+        dragons: team.objectives?.dragon?.kills || 0,
+        barons: team.objectives?.baron?.kills || 0,
+        inhibitors: team.objectives?.inhibitor?.kills || 0,
+        riftHeralds: team.objectives?.riftHerald?.kills || 0
+      },
+      players,
+      totals: participantTotals(players)
+    };
+  }).filter((team) => team.players.length);
+}
+
+function participantTotals(players) {
+  return {
+    kills: players.reduce((sum, player) => sum + player.kills, 0),
+    deaths: players.reduce((sum, player) => sum + player.deaths, 0),
+    assists: players.reduce((sum, player) => sum + player.assists, 0),
+    damage: players.reduce((sum, player) => sum + player.damage, 0),
+    gold: players.reduce((sum, player) => sum + player.gold, 0)
+  };
 }
 
 function summarizeValorantMatch(match, puuid, contentNames) {
